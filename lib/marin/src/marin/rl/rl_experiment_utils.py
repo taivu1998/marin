@@ -6,6 +6,7 @@ import datetime
 import importlib
 import logging
 import uuid
+from typing import Literal, cast
 from urllib.parse import urlparse
 
 import jmp
@@ -39,7 +40,6 @@ from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 logger = logging.getLogger(__name__)
 
 RL_EXECUTOR_STEP_RESOURCES = ResourceConfig.with_cpu(cpu=0.5, ram="4g", disk="30g")
-
 
 ModelArtifact = ExecutorStep | InputName | str
 
@@ -82,6 +82,7 @@ class RLExperimentConfig:
     num_train_steps: int = 500
     steps_per_eval: int = 100
     checkpointer_save_interval: int = 600
+    train_attention_backend: AttentionBackend | None = None
     delete_previous_temporary_checkpoint_after_save: bool = True
     checkpoint_debug: CheckpointDebugConfig = dataclasses.field(default_factory=CheckpointDebugConfig)
 
@@ -121,19 +122,15 @@ class RLExperimentConfig:
     inference_tensor_parallel_size: int = 4
     inference_gpu_memory_utilization: float = 0.90
 
-    # run config (TPU slice info)
-    train_tpu_type: str = "v5p-8"
-    inference_tpu_type: str = "v5p-8"
-    num_train_slices: int = 1
+    # run config
+    train_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig.with_tpu("v5p-8"))
+    rollout_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig.with_tpu("v5p-8"))
     num_rollout_workers: int = 1
-    train_ram: str | None = None
-    inference_ram: str | None = None
-    zone: str | None = None
 
 
 def launcher_region_for_rl_experiment(config: RLExperimentConfig) -> str:
     """Return the concrete region that should host the RL launcher and workers."""
-    return resolve_launcher_region(config.train_tpu_type, config.inference_tpu_type)
+    return resolve_launcher_region(config.train_resources, config.rollout_resources)
 
 
 def executor_step_resources_for_rl_experiment(config: RLExperimentConfig) -> ResourceConfig:
@@ -154,26 +151,20 @@ def get_stop_tokens(model_type: str) -> list[str]:
     """Get model-specific stop tokens."""
     if model_type == "llama":
         return ["<|eot_id|>"]
-    elif model_type == "qwen":
+    if model_type == "qwen":
         return ["<|im_end|>"]
-    else:
-        raise ValueError(f"Unknown model_type: {model_type}")
+    raise ValueError(f"Unknown model_type: {model_type}")
 
 
 def _resolve_model_artifact_path(artifact: ModelArtifact) -> InputName | str:
     if isinstance(artifact, ExecutorStep):
         return output_path_of(artifact)
-
     return artifact
 
 
-def _vllm_load_format_for_model_path(model_path: str) -> str:
+def vllm_load_format_for_model_path(model_path: str) -> str:
     if urlparse(model_path).scheme in {"gs", "s3"}:
-        # vLLM requires the streaming loader for object-store checkpoints.
-        # `dummy` works for some local/HF cases where weights arrive later via
-        # Arrow Flight, but remote object-store paths now fail validation.
         return "runai_streamer"
-
     return "dummy"
 
 
@@ -196,7 +187,26 @@ def _resolve_config_class(config_class_path: str) -> type[HFCompatConfig]:
     return obj
 
 
-def _build_vllm_engine_config(config: RLExperimentConfig, model_path: str) -> VLLMEngineConfig:
+def default_train_attention_backend(train_resources: ResourceConfig) -> AttentionBackend:
+    if train_resources.device.kind == "tpu":
+        return AttentionBackend.SPLASH
+    return AttentionBackend.DEFAULT
+
+
+def resolve_train_attention_backend(
+    train_resources: ResourceConfig,
+    explicit_backend: AttentionBackend | None = None,
+) -> AttentionBackend:
+    if explicit_backend is not None:
+        return explicit_backend
+    return default_train_attention_backend(train_resources)
+
+
+def _build_vllm_engine_config(
+    config: RLExperimentConfig,
+    model_path: str,
+    device_kind: Literal["gpu", "tpu"],
+) -> VLLMEngineConfig:
     """Return engine/runtime settings for the vLLM backend."""
     return VLLMEngineConfig(
         model_name=model_path,
@@ -204,7 +214,8 @@ def _build_vllm_engine_config(config: RLExperimentConfig, model_path: str) -> VL
         max_model_len=config.max_input_tokens + config.max_output_tokens,
         tensor_parallel_size=config.inference_tensor_parallel_size,
         gpu_memory_utilization=config.inference_gpu_memory_utilization,
-        load_format=_vllm_load_format_for_model_path(model_path),
+        device_kind=device_kind,
+        load_format=vllm_load_format_for_model_path(model_path),
     )
 
 
@@ -235,6 +246,23 @@ def _build_rl_job_config(
     *,
     instance_id: str | None = None,
 ) -> RLJobConfig:
+    rollout_device_kind = config.rollout_resources.device.kind
+    if rollout_device_kind not in {"gpu", "tpu"}:
+        raise ValueError("RL rollout_resources must request GPU or TPU accelerators for vLLM inference")
+    if config.inflight_weight_updates and rollout_device_kind == "gpu":
+        raise ValueError("GPU vLLM rollout inference does not yet support inflight_weight_updates")
+    vllm_device_kind = cast(Literal["gpu", "tpu"], rollout_device_kind)
+
+    launcher_region = launcher_region_for_rl_experiment(config)
+    train_resources = dataclasses.replace(
+        config.train_resources,
+        regions=singleton_region_list(launcher_region),
+    )
+    rollout_resources = dataclasses.replace(
+        config.rollout_resources,
+        regions=singleton_region_list(launcher_region),
+    )
+
     model_config_class = _resolve_config_class(config.model_config.config_class_path)
     converter = HFCheckpointConverter(
         LevConfigClass=model_config_class,
@@ -242,12 +270,16 @@ def _build_rl_job_config(
         tokenizer=model_path,
     )
     model_config_cls = model_config_class.from_hf_config(converter.default_hf_config)
+    train_attention_backend = resolve_train_attention_backend(
+        config.train_resources,
+        config.train_attention_backend,
+    )
 
     model_config = dataclasses.replace(
         model_config_cls,
         max_seq_len=config.max_input_tokens + config.max_output_tokens,
         tokenizer=model_path,
-        attn_backend=AttentionBackend.SPLASH,
+        attn_backend=train_attention_backend,
     )
 
     tags = [*config.tags, config.model_config.name.split("/")[-1]]
@@ -302,8 +334,7 @@ def _build_rl_job_config(
     if instance_id is not None:
         curriculum_config = dataclasses.replace(curriculum, actor_name=f"curriculum-{instance_id}")
 
-    # Create RLJobConfig using the unified interface
-    job_config = RLJobConfig(
+    return RLJobConfig(
         model=model_config,
         vocab_size=converter.default_hf_config.vocab_size,
         trainer=trainer_config,
@@ -321,7 +352,7 @@ def _build_rl_job_config(
         tokenizer=model_path,
         inference_type="vllm",
         inference_config=vLLMInferenceContextConfig(
-            engine=_build_vllm_engine_config(config, model_path),
+            engine=_build_vllm_engine_config(config, model_path, vllm_device_kind),
             fallback_sampling=_build_vllm_fallback_sampling_config(config),
         ),
         initial_checkpoint=model_path,
@@ -330,14 +361,9 @@ def _build_rl_job_config(
         run_id=name,
         log_freq=1,
         run_config=RunConfig(
-            train_tpu_type=config.train_tpu_type,
-            num_train_slices=config.num_train_slices,
+            train_resources=train_resources,
+            rollout_resources=rollout_resources,
             num_rollout_workers=config.num_rollout_workers,
-            inference_tpu_type=config.inference_tpu_type,
-            train_ram=config.train_ram,
-            inference_ram=config.inference_ram,
-            regions=singleton_region_list(launcher_region_for_rl_experiment(config)),
-            zone=config.zone,
         ),
         inflight_weight_updates=config.inflight_weight_updates,
         instance_id=instance_id,
@@ -350,8 +376,6 @@ def _build_rl_job_config(
             config.model_config.pip_dependency_groups if config.model_config.pip_dependency_groups else ["vllm", "math"]
         ),
     )
-
-    return job_config
 
 
 def _run_rl_experiment_step(config: RLStepConfig) -> PathMetadata:
