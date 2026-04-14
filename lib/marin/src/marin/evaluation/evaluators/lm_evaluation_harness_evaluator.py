@@ -8,6 +8,7 @@ import tempfile
 import traceback
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import Any
 
 from rigging.filesystem import open_url, url_to_fs
 
@@ -17,6 +18,38 @@ from marin.evaluation.utils import is_remote_path, upload_to_gcs
 from marin.inference.vllm_server import VllmEnvironment
 
 logger = logging.getLogger(__name__)
+
+
+def _model_args_for_lm_eval(
+    *,
+    model: ModelConfig,
+    model_id: str,
+    server_url: str,
+    tokenizer: str,
+    apply_chat_template: bool,
+) -> str:
+    endpoint = "chat/completions" if apply_chat_template else "completions"
+    args = (
+        f"model={model_id},"
+        f"base_url={server_url}/{endpoint},"
+        "tokenizer_backend=huggingface,"
+        "tokenized_requests=False,"
+        f"tokenizer={tokenizer}"
+    )
+    for key, value in model.engine_kwargs.items():
+        if key == "tokenizer":
+            continue
+        args += f",{key}={value}"
+    return args
+
+
+def _lm_eval_metadata(model: ModelConfig, eval_task: EvalTaskConfig, *, tokenizer: str) -> dict[str, Any]:
+    metadata = dict(model.task_metadata or {})
+    if eval_task.task_kwargs:
+        metadata.update(eval_task.task_kwargs)
+    metadata["tokenizer"] = tokenizer
+    metadata.setdefault("pretrained", tokenizer)
+    return metadata
 
 
 # TODO: Multiple choice tasks currently don't work on TPUs: https://github.com/vllm-project/vllm/issues/8499
@@ -86,12 +119,13 @@ class LMEvaluationHarnessEvaluator(Evaluator):
             with VllmEnvironment(model) as env:
                 resolved_model = env.model
 
-                def _run_lm_eval(lm_eval_model_local: str, pretrained_args_local: str) -> None:
+                def _run_lm_eval(lm_eval_model_local: str, pretrained_args_local: str, tokenizer: str) -> None:
                     from lm_eval.evaluator import simple_evaluate
                     from lm_eval.loggers import EvaluationTracker, WandbLogger
                     from lm_eval.utils import simple_parse_args_string
 
                     for eval_task in evals:
+                        metadata = _lm_eval_metadata(resolved_model, eval_task, tokenizer=tokenizer)
                         result_filepath = os.path.join(
                             self.RESULTS_PATH, f"{eval_task.name}_{eval_task.num_fewshot}shot"
                         )
@@ -123,6 +157,7 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                             limit=max_eval_instances if max_eval_instances is not None else None,
                             evaluation_tracker=evaluation_tracker,
                             log_samples=True,
+                            metadata=metadata,
                         )
                         if results is not None:
                             samples = results.pop("samples")
@@ -144,32 +179,20 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                 if env.model_id is None:
                     raise RuntimeError("vLLM server did not report a model id.")
 
-                def _run_with_tokenizer(tokenizer: str | None) -> None:
+                def _run_with_tokenizer(tokenizer: str) -> None:
                     if resolved_model.apply_chat_template:
                         lm_eval_model_local = "local-chat-completions"
-                        pretrained_args_local = (
-                            f"model={env.model_id},"
-                            f"base_url={env.server_url}/chat/completions,"
-                            "tokenizer_backend=huggingface,"
-                            "tokenized_requests=False"
-                        )
                     else:
                         lm_eval_model_local = "local-completions"
-                        pretrained_args_local = (
-                            f"model={env.model_id},"
-                            f"base_url={env.server_url}/completions,"
-                            "tokenizer_backend=huggingface,"
-                            "tokenized_requests=False"
-                        )
-                    if tokenizer is not None:
-                        pretrained_args_local += f",tokenizer={tokenizer}"
-                    if resolved_model.engine_kwargs:
-                        for key, value in resolved_model.engine_kwargs.items():
-                            if key == "tokenizer":
-                                continue
-                            pretrained_args_local += f",{key}={value}"
 
-                    _run_lm_eval(lm_eval_model_local, pretrained_args_local)
+                    pretrained_args_local = _model_args_for_lm_eval(
+                        model=resolved_model,
+                        model_id=env.model_id,
+                        server_url=env.server_url,
+                        tokenizer=tokenizer,
+                        apply_chat_template=resolved_model.apply_chat_template,
+                    )
+                    _run_lm_eval(lm_eval_model_local, pretrained_args_local, tokenizer)
 
                 if isinstance(resolved_model.engine_kwargs.get("tokenizer"), str):
                     _run_with_tokenizer(resolved_model.engine_kwargs.get("tokenizer"))
@@ -185,7 +208,7 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                             )
                         _run_with_tokenizer(staged_tokenizer_dir)
                 else:
-                    _run_with_tokenizer(None)
+                    _run_with_tokenizer(env.model_name_or_path)
 
                 return
 

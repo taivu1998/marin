@@ -22,6 +22,11 @@ from fray.types import (
     ResourceConfig,
     TpuConfig,
 )
+from iris.cluster.constraints import Constraint, ConstraintOp
+
+
+def constraint_values(constraint: Constraint) -> tuple[str | int | float, ...]:
+    return tuple(value.value for value in constraint.values)
 
 
 class TestConvertConstraints:
@@ -36,7 +41,7 @@ class TestConvertConstraints:
         assert len(constraints) == 1
         c = constraints[0]
         assert c.key == "preemptible"
-        assert c.values[0].value == "false"
+        assert constraint_values(c) == ("false",)
 
     def test_single_region_produces_eq_constraint(self):
         resources = ResourceConfig(regions=["us-central1"])
@@ -44,10 +49,9 @@ class TestConvertConstraints:
         region_constraints = [c for c in constraints if c.key == "region"]
         assert len(region_constraints) == 1
         c = region_constraints[0]
-        from iris.cluster.constraints import ConstraintOp
 
         assert c.op == ConstraintOp.EQ
-        assert c.values[0].value == "us-central1"
+        assert constraint_values(c) == ("us-central1",)
 
     def test_multiple_regions_produce_in_constraint(self):
         resources = ResourceConfig(regions=["us-central1", "us-central2"])
@@ -55,10 +59,9 @@ class TestConvertConstraints:
         region_constraints = [c for c in constraints if c.key == "region"]
         assert len(region_constraints) == 1
         c = region_constraints[0]
-        from iris.cluster.constraints import ConstraintOp
 
         assert c.op == ConstraintOp.IN
-        assert tuple(v.value for v in c.values) == ("us-central1", "us-central2")
+        assert constraint_values(c) == ("us-central1", "us-central2")
 
     def test_zone_produces_eq_constraint(self):
         resources = ResourceConfig(zone="us-east1-d")
@@ -66,10 +69,9 @@ class TestConvertConstraints:
         zone_constraints = [c for c in constraints if c.key == "zone"]
         assert len(zone_constraints) == 1
         c = zone_constraints[0]
-        from iris.cluster.constraints import ConstraintOp
 
         assert c.op == ConstraintOp.EQ
-        assert c.values[0].value == "us-east1-d"
+        assert constraint_values(c) == ("us-east1-d",)
 
 
 class TestConvertConstraintsDeviceAlternatives:
@@ -85,10 +87,9 @@ class TestConvertConstraintsDeviceAlternatives:
         device_constraints = [c for c in constraints if c.key == "device-variant"]
         assert len(device_constraints) == 1
         c = device_constraints[0]
-        from iris.cluster.constraints import ConstraintOp
 
         assert c.op == ConstraintOp.IN
-        assert {v.value for v in c.values} == {"v4-8", "v5p-8"}
+        assert set(constraint_values(c)) == {"v4-8", "v5p-8"}
 
 
 class TestIrisActorHandlePickle:
