@@ -18,7 +18,7 @@ from fray.types import ActorConfig, Entrypoint, JobRequest, ResourceConfig, crea
 from iris.cluster.client.job_info import get_job_info
 from rigging.log_setup import configure_logging
 
-from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.inference.model_config import ModelConfig
 from marin.inference.broker import InferenceBroker
 from marin.inference.proxy import serve_inference_proxy
 from marin.inference.types import InferenceRequestProvider, InferenceResponseProvider, OpenAIEndpoint, RunningModel

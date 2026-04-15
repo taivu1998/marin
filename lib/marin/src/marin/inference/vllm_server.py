@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 import requests
 from rigging.filesystem import marin_prefix
 
-from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.inference.model_config import ModelConfig
 
 logger = logging.getLogger(__name__)
 _REMOVED_VLLM_MODE_MESSAGE = (

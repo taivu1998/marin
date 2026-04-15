@@ -12,7 +12,7 @@ import requests
 from fray import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 
-from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.inference.model_config import ModelConfig
 from marin.inference.vllm_server import VllmEnvironment
 
 
