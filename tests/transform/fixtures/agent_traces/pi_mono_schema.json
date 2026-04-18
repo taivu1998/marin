@@ -1,0 +1,29 @@
+{
+  "top_level_fields": [
+    "harness",
+    "session_id",
+    "traces",
+    "file_path"
+  ],
+  "entry_fields": [
+    "type",
+    "id",
+    "parentId",
+    "timestamp"
+  ],
+  "message_roles": [
+    "user",
+    "assistant",
+    "toolResult"
+  ],
+  "control_entry_types": [
+    "model_change",
+    "thinking_level_change",
+    "session_info",
+    "compaction",
+    "branch_summary",
+    "custom",
+    "custom_message",
+    "label"
+  ]
+}

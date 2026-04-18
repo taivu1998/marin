@@ -1,0 +1,218 @@
+{
+  "harness": "pi",
+  "session_id": "session-pi-001",
+  "file_path": "2026-04-17T12-00-00-000Z_session-pi-001.jsonl",
+  "traces": [
+    {
+      "type": "session",
+      "version": 3,
+      "id": "session-pi-001",
+      "timestamp": "2026-04-17T12:00:00.000Z",
+      "cwd": "/Users/pi/workspaces/pi-mono"
+    },
+    {
+      "type": "model_change",
+      "id": "root-model",
+      "parentId": null,
+      "timestamp": "2026-04-17T12:00:00.100Z",
+      "provider": "anthropic",
+      "modelId": "claude-sonnet-4-5"
+    },
+    {
+      "type": "thinking_level_change",
+      "id": "root-thinking",
+      "parentId": "root-model",
+      "timestamp": "2026-04-17T12:00:00.150Z",
+      "thinkingLevel": "high"
+    },
+    {
+      "type": "session_info",
+      "id": "root-info",
+      "parentId": "root-thinking",
+      "timestamp": "2026-04-17T12:00:00.200Z",
+      "name": "Fix parser empty-input regression"
+    },
+    {
+      "type": "message",
+      "id": "user-1",
+      "parentId": "root-info",
+      "timestamp": "2026-04-17T12:00:01.000Z",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Please fix the empty input parser crash."
+          },
+          {
+            "type": "image",
+            "data": "base64-placeholder",
+            "mimeType": "image/png"
+          }
+        ],
+        "timestamp": 1776427201000
+      }
+    },
+    {
+      "type": "message",
+      "id": "assistant-1",
+      "parentId": "user-1",
+      "timestamp": "2026-04-17T12:00:02.000Z",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "I should run the focused parser test first."
+          },
+          {
+            "type": "text",
+            "text": "I'll run the targeted parser test."
+          },
+          {
+            "type": "toolCall",
+            "id": "call-pytest",
+            "name": "bash",
+            "arguments": {
+              "command": "pytest tests/test_parser.py -k empty_input"
+            }
+          }
+        ],
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5",
+        "timestamp": 1776427202000
+      }
+    },
+    {
+      "type": "message",
+      "id": "tool-1",
+      "parentId": "assistant-1",
+      "timestamp": "2026-04-17T12:00:03.000Z",
+      "message": {
+        "role": "toolResult",
+        "toolCallId": "call-pytest",
+        "toolName": "bash",
+        "content": [
+          {
+            "type": "text",
+            "text": "1 failed, 24 passed\nAssertionError: parser accepted empty input"
+          }
+        ],
+        "isError": false,
+        "timestamp": 1776427203000
+      }
+    },
+    {
+      "type": "message",
+      "id": "assistant-2",
+      "parentId": "tool-1",
+      "timestamp": "2026-04-17T12:00:04.000Z",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "The parser needs an empty-input guard in parse_header()."
+          }
+        ],
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5",
+        "timestamp": 1776427204000
+      }
+    },
+    {
+      "type": "compaction",
+      "id": "compaction-leaf",
+      "parentId": "assistant-2",
+      "timestamp": "2026-04-17T12:00:04.500Z",
+      "summary": "Earlier parser investigation summarized.",
+      "firstKeptEntryId": "tool-1",
+      "tokensBefore": 12000
+    },
+    {
+      "type": "branch_summary",
+      "id": "branch-1",
+      "parentId": "user-1",
+      "timestamp": "2026-04-17T12:00:05.000Z",
+      "fromId": "assistant-2",
+      "summary": "Previous branch fixed parse_header, but I want to inspect tokenizer assumptions too."
+    },
+    {
+      "type": "custom",
+      "id": "custom-drop",
+      "parentId": "branch-1",
+      "timestamp": "2026-04-17T12:00:05.200Z",
+      "customType": "note-cache",
+      "data": {
+        "cached": true
+      }
+    },
+    {
+      "type": "custom_message",
+      "id": "custom-message-1",
+      "parentId": "custom-drop",
+      "timestamp": "2026-04-17T12:00:05.300Z",
+      "customType": "review-note",
+      "content": [
+        {
+          "type": "text",
+          "text": "Focus on parser/tokenizer boundaries, not UI code."
+        }
+      ],
+      "display": false
+    },
+    {
+      "type": "message",
+      "id": "assistant-branch",
+      "parentId": "custom-message-1",
+      "timestamp": "2026-04-17T12:00:06.000Z",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Alternative path: inspect tokenizer normalization before patching parser."
+          },
+          {
+            "type": "toolCall",
+            "id": "call-grep",
+            "name": "bash",
+            "arguments": {
+              "command": "rg -n \"normalize\" src/parser src/tokenizer"
+            }
+          }
+        ],
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5",
+        "timestamp": 1776427206000
+      }
+    },
+    {
+      "type": "message",
+      "id": "tool-branch",
+      "parentId": "assistant-branch",
+      "timestamp": "2026-04-17T12:00:07.000Z",
+      "message": {
+        "role": "toolResult",
+        "toolCallId": "call-grep",
+        "toolName": "bash",
+        "content": [
+          {
+            "type": "text",
+            "text": "src/tokenizer.py:88: normalize_token"
+          }
+        ],
+        "isError": true,
+        "timestamp": 1776427207000
+      }
+    },
+    {
+      "type": "label",
+      "id": "label-leaf",
+      "parentId": "tool-branch",
+      "timestamp": "2026-04-17T12:00:07.200Z",
+      "targetId": "assistant-branch",
+      "label": "checkpoint"
+    }
+  ]
+}
