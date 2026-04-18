@@ -1,0 +1,97 @@
+{
+  "schema_version": "0.2.0",
+  "trace_id": "trace-opentraces-001",
+  "session_id": "session-opentraces-001",
+  "content_hash": "sha256-opentraces-001",
+  "execution_context": "runtime",
+  "task": {
+    "description": "Fix the failing parser test while preserving behavior for valid input.",
+    "source": "unit-test",
+    "repository": "example/parser-repo",
+    "base_commit": "abc1234"
+  },
+  "agent": {
+    "name": "hermes-agent",
+    "version": "0.2.0",
+    "model": "z-ai/glm-5"
+  },
+  "tool_definitions": [
+    "{\"description\": \"Run targeted pytest suites\", \"name\": \"pytest\", \"parameters\": {\"properties\": {\"path\": {\"type\": \"string\"}}, \"type\": \"object\"}}",
+    "{\"description\": \"Search files for a pattern\", \"name\": \"grep\", \"parameters\": {\"properties\": {\"pattern\": {\"type\": \"string\"}}, \"type\": \"object\"}}"
+  ],
+  "steps": [
+    {
+      "step_index": 0,
+      "role": "user",
+      "content": "Fix the failing parser test and explain the root cause.",
+      "reasoning_content": "",
+      "tool_calls": [],
+      "observations": [],
+      "timestamp": "2026-03-29T00:00:00Z"
+    },
+    {
+      "step_index": 1,
+      "role": "assistant",
+      "content": "I'll run the targeted test first.",
+      "reasoning_content": "I should reproduce the failure before patching anything.",
+      "tool_calls": [
+        {
+          "tool_call_id": "call-1",
+          "tool_name": "pytest",
+          "input": {
+            "path": "tests/test_parser.py -k empty_input"
+          },
+          "duration_ms": 420
+        }
+      ],
+      "observations": [
+        {
+          "source_call_id": "call-1",
+          "content": "1 failed, 24 passed\nE AssertionError: expected empty input to return None",
+          "output_summary": "Targeted parser test fails on empty input.",
+          "error": ""
+        }
+      ],
+      "timestamp": "2026-03-29T00:00:05Z"
+    },
+    {
+      "step_index": 2,
+      "role": "assistant",
+      "content": "The parser enters the normal branch for empty input, so I'll guard that path before tokenization.",
+      "reasoning_content": "",
+      "tool_calls": [],
+      "observations": [],
+      "timestamp": "2026-03-29T00:00:11Z"
+    }
+  ],
+  "outcome": {
+    "success": true,
+    "signal_source": "user",
+    "signal_confidence": "high",
+    "description": "Patch applied and the targeted tests pass.",
+    "patch": "diff --git a/parser.py b/parser.py ...",
+    "committed": false,
+    "commit_sha": "",
+    "terminal_state": "completed",
+    "reward": 1.0,
+    "reward_source": "self_report"
+  },
+  "metrics": {
+    "total_steps": 3,
+    "total_input_tokens": 321,
+    "total_output_tokens": 654,
+    "total_duration_s": 5.4,
+    "cache_hit_rate": 0.0,
+    "estimated_cost_usd": 0.02
+  },
+  "security": {
+    "scanned": true,
+    "flags_reviewed": 0,
+    "redactions_applied": 0,
+    "classifier_version": "v1"
+  },
+  "metadata": {
+    "task_category": "coding",
+    "language": "python"
+  }
+}

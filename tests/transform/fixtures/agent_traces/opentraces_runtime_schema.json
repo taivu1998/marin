@@ -1,0 +1,38 @@
+{
+  "top_level_fields": [
+    "schema_version",
+    "trace_id",
+    "session_id",
+    "content_hash",
+    "execution_context",
+    "task",
+    "agent",
+    "tool_definitions",
+    "steps",
+    "outcome",
+    "metrics",
+    "security",
+    "metadata"
+  ],
+  "step_fields": [
+    "step_index",
+    "role",
+    "content",
+    "reasoning_content",
+    "tool_calls",
+    "observations",
+    "timestamp"
+  ],
+  "tool_call_fields": [
+    "tool_call_id",
+    "tool_name",
+    "input",
+    "duration_ms"
+  ],
+  "observation_fields": [
+    "source_call_id",
+    "content",
+    "output_summary",
+    "error"
+  ]
+}
