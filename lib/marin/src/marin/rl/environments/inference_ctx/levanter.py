@@ -18,7 +18,7 @@ from jax.sharding import Mesh
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.lm_model import LmHeadModel
 from levanter.tokenizers import MarinTokenizer
-from marin.rl.environments.inference_ctx.base import BaseInferenceContext
+from marin.rl.environments.inference_ctx.base import BaseInferenceContext, PromptLike, prompt_to_messages
 
 # TODO(chris): use a different weight transfer method update model, take it out from here
 from marin.rl.weight_transfer.arrow_flight import update_model
@@ -86,10 +86,9 @@ class LevanterInferenceContext(BaseInferenceContext):
     def shutdown(self) -> None:
         self._inference_server.shutdown()
 
-    # TODO: add support for ChatCompletion style [ { role, content} ] messages
     def batch_completions(
         self,
-        prompts: list[str] | list[list[dict]],
+        prompts: list[PromptLike],
         temperature: float,
         n: int,
         max_tokens: int | None = None,
@@ -109,10 +108,10 @@ class LevanterInferenceContext(BaseInferenceContext):
         asyncio.set_event_loop(loop)
         client = self.openai_client()
 
-        async def create_completion(prompt: str) -> ChatCompletion:
+        async def create_completion(prompt: PromptLike) -> ChatCompletion:
             return await client.chat.completions.create(
                 model=getattr(self._inference_server.config, "model_name", "test-model"),
-                messages=[{"role": "user", "content": prompt}],
+                messages=prompt_to_messages(prompt, system_prompt),
                 logprobs=True,
                 max_tokens=max_tokens,
                 temperature=temperature,

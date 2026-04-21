@@ -194,6 +194,31 @@ def test_log_lesson_eval_uses_wandb_default_step_and_context_metrics():
     ]
 
 
+def test_load_environment_prepares_once_before_caching(monkeypatch):
+    prepare_calls = []
+
+    class _FakeEnv:
+        def prepare(self):
+            prepare_calls.append("prepare")
+
+    fake_env = _FakeEnv()
+
+    worker = object.__new__(RolloutWorker)
+    worker._environments = {}
+    worker.config = SimpleNamespace(
+        curriculum_config=SimpleNamespace(lessons={"lesson-a": SimpleNamespace(env_config=SimpleNamespace())})
+    )
+
+    monkeypatch.setattr("marin.rl.rollout_worker.load_environment_from_spec", lambda _config: fake_env)
+
+    first = worker._load_environment("lesson-a")
+    second = worker._load_environment("lesson-a")
+
+    assert first is fake_env
+    assert second is fake_env
+    assert prepare_calls == ["prepare"]
+
+
 def test_sample_batch_attaches_trace_and_verifier_metadata():
     rollout = Rollout(
         env_name="mock_env:cats",

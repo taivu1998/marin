@@ -496,6 +496,7 @@ class RolloutWorker:
 
         lesson_config = self.config.curriculum_config.lessons[lesson_id]
         env = load_environment_from_spec(lesson_config.env_config)
+        env.prepare()
         self._environments[lesson_id] = env
         return env
 

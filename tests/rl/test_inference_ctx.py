@@ -3,6 +3,7 @@
 
 """Tests for InferenceContext utilities and chat template handling."""
 
+import asyncio
 import sys
 from dataclasses import dataclass
 from types import ModuleType, SimpleNamespace
@@ -15,14 +16,17 @@ from marin.rl.environments.inference_ctx import (
     MODEL_TRANSPOSE_KEYS,
     LevanterInferenceContext,
     LevanterInferenceContextConfig,
+    OpenAICompatClient,
     VLLMSamplingConfig,
+    prompt_to_messages,
     vLLMInferenceContext,
     vLLMInferenceContextConfig,
 )
 from marin.rl.environments.inference_ctx.inflight.worker import WorkerExtension
 from marin.rl.environments.inference_ctx.vllm import InferenceMode
-from openai.types.chat import ChatCompletionMessage
+from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
+from openai.types.completion_usage import CompletionUsage
 from transformers import AutoTokenizer
 
 _LLAMA3_MODEL_ID = "NousResearch/Meta-Llama-3-8B-Instruct"
@@ -167,6 +171,16 @@ def test_tokenize_prompt_fallback_no_template(gpt2_tokenizer, dummy_server):
     assert prompt in decoded
 
 
+def test_prompt_to_messages_supports_chat_prompts_and_system_prompt():
+    prompt = [{"role": "user", "content": "Hello"}]
+
+    assert prompt_to_messages("Hi") == [{"role": "user", "content": "Hi"}]
+    assert prompt_to_messages(prompt, system_prompt="System") == [
+        {"role": "system", "content": "System"},
+        {"role": "user", "content": "Hello"},
+    ]
+
+
 def test_response_tokens_from_choice(inference_ctx, llama3_tokenizer):
     """Test extracting token IDs from Choice using BPE round-trip."""
     response_text = "The answer is 42"
@@ -245,6 +259,84 @@ def test_create_rollout_from_choice_end_to_end(inference_ctx, llama3_tokenizer):
     # Verify token rewards
     assert len(rollout.token_rewards) == len(expected_response_tokens)
     np.testing.assert_array_equal(rollout.token_rewards, np.full(len(expected_response_tokens), reward))
+
+
+def test_openai_compat_client_delegates_to_batch_completions():
+    captured = {}
+    completion = ChatCompletion(
+        id="chatcmpl-test",
+        choices=[
+            Choice(
+                finish_reason="stop",
+                index=0,
+                message=ChatCompletionMessage(role="assistant", content="done"),
+                logprobs=None,
+            )
+        ],
+        created=1234567890,
+        model="test-model",
+        object="chat.completion",
+        usage=CompletionUsage(completion_tokens=1, prompt_tokens=1, total_tokens=2),
+    )
+
+    class _FakeContext:
+        sampling_config = SimpleNamespace(temperature=0.25)
+
+        def batch_completions(self, *, prompts, temperature, n, max_tokens, top_k, stop, system_prompt):
+            captured.update(
+                {
+                    "prompts": prompts,
+                    "temperature": temperature,
+                    "n": n,
+                    "max_tokens": max_tokens,
+                    "top_k": top_k,
+                    "stop": stop,
+                    "system_prompt": system_prompt,
+                }
+            )
+            return [completion]
+
+    client = OpenAICompatClient(_FakeContext())
+    result = asyncio.run(
+        client.chat.completions.create(
+            messages=[{"role": "user", "content": "Hello"}],
+            model="marin-model",
+            n=2,
+            max_tokens=32,
+            logprobs=True,
+            top_logprobs=1,
+            extra_body={"top_k": 7},
+        )
+    )
+
+    assert result is completion
+    assert captured == {
+        "prompts": [[{"role": "user", "content": "Hello"}]],
+        "temperature": 0.25,
+        "n": 2,
+        "max_tokens": 32,
+        "top_k": 7,
+        "stop": None,
+        "system_prompt": None,
+    }
+
+
+def test_openai_compat_client_rejects_tool_enabled_requests():
+    class _FakeContext:
+        def batch_completions(self, **_kwargs):
+            raise AssertionError("batch_completions should not be called for tool-enabled requests")
+
+    client = OpenAICompatClient(_FakeContext())
+
+    with pytest.raises(NotImplementedError, match="Tool-enabled verifier environments are not supported yet"):
+        asyncio.run(
+            client.chat.completions.create(
+                messages=[{"role": "user", "content": "Hello"}],
+                model="marin-model",
+                logprobs=True,
+                tools=[{"type": "function"}],
+            )
+        )
 
 
 def test_vllm_inference_context_uses_canonical_model_name(monkeypatch):

@@ -155,8 +155,10 @@ cpu = [
 rl = [
     "prime",
     "sympy>=1.12.1,<1.14",
-    "verifiers==0.1.5",
+    "verifiers==0.1.10",
 ]
+
+reasoning-gym = ["reasoning-gym"]
 
 eval = [
     "lm-eval[math,api]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",

@@ -11,7 +11,7 @@ from enum import StrEnum
 import numpy as np
 from levanter.models.lm_model import LmHeadModel
 from levanter.tokenizers import load_tokenizer
-from marin.rl.environments.inference_ctx.base import BaseInferenceContext
+from marin.rl.environments.inference_ctx.base import BaseInferenceContext, PromptLike
 from marin.rl.environments.inference_ctx.inflight.worker import SyncVLLMWrapper
 from marin.rl.environments.inference_ctx.render import Llama3Renderer, Message, Qwen3Renderer, Renderer
 from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
@@ -199,7 +199,12 @@ class vLLMInferenceContext(BaseInferenceContext):
 
         return llm_engine_cls(**engine_kwargs)
 
-    def tokenize_prompt(self, prompt: str, choice: Choice | None = None, system_prompt: str | None = None) -> np.ndarray:
+    def tokenize_prompt(
+        self,
+        prompt: PromptLike,
+        choice: Choice | None = None,
+        system_prompt: str | None = None,
+    ) -> np.ndarray:
         """Tokenize the prompt with the choice's prompt token IDs.
 
         NOTE(chris): This is a hack to get the prompt token IDs the same since
@@ -207,6 +212,7 @@ class vLLMInferenceContext(BaseInferenceContext):
         This is a known issue documented here:
         https://github.com/vllm-project/vllm/issues/27486
         """
+        del prompt, system_prompt
         return np.array(choice.prompt_token_ids, dtype=np.int32)
 
     def response_tokens_from_choice(self, choice: Choice) -> np.ndarray:
@@ -324,7 +330,7 @@ class vLLMInferenceContext(BaseInferenceContext):
 
     def batch_completions(
         self,
-        prompts: list[str] | list[list[dict]],
+        prompts: list[PromptLike],
         temperature: float,
         n: int,
         max_tokens: int | None = None,

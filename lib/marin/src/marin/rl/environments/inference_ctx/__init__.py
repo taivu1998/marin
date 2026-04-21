@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .async_vllm import AsyncvLLMInferenceContext
-from .base import BaseInferenceContext
+from .base import BaseInferenceContext, PromptLike, PromptMessage, prompt_to_messages
 from .levanter import LevanterInferenceContext, LevanterInferenceContextConfig
+from .openai_compat import OpenAICompatClient
 from .vllm import (
     MODEL_MAPPINGS,
     MODEL_TRANSPOSE_KEYS,
@@ -19,7 +20,11 @@ __all__ = [
     "BaseInferenceContext",
     "LevanterInferenceContext",
     "LevanterInferenceContextConfig",
+    "OpenAICompatClient",
+    "PromptLike",
+    "PromptMessage",
     "VLLMSamplingConfig",
+    "prompt_to_messages",
     "vLLMInferenceContext",
     "vLLMInferenceContextConfig",
 ]
