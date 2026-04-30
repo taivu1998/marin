@@ -7,7 +7,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from marin.transform.agent_traces.common import TraceSourceFormat, TraceTranscriptConfig
 from marin.transform.agent_traces.opentraces_runtime_to_dolma import (
     OPENTRACES_RUNTIME_SOURCE,

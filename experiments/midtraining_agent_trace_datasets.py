@@ -4,10 +4,6 @@
 """Research-first registry for transcript-style agent-trace mid-training datasets."""
 
 from levanter.data.text import TextLmDatasetFormat
-
-from experiments.defaults import default_download, default_tokenize
-from experiments.llama import llama3_tokenizer
-from experiments.midtraining_datasets import finemath_3_plus_tokenized
 from marin.execution.executor import ExecutorStep, this_output_path
 from marin.processing.tokenize import lm_mixture_data_config
 from marin.transform.agent_traces.opentraces_runtime_to_dolma import (
@@ -20,6 +16,10 @@ from marin.transform.agent_traces.pi_session_to_dolma import (
     PiSessionToDolmaConfig,
     convert_pi_session_to_dolma,
 )
+
+from experiments.defaults import default_download, default_tokenize
+from experiments.llama import llama3_tokenizer
+from experiments.midtraining_datasets import finemath_3_plus_tokenized
 
 OPENTRACES_RUNTIME_REVISION = "778faed3c7d7a36089324f4f3f5bab66bf77f2ad"
 PI_MONO_REVISION = "dac2a1d3ba12dda597b973a791a77618ccb5f413"

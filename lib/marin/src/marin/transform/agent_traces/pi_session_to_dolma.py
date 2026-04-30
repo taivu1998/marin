@@ -3,15 +3,15 @@
 
 """Convert Pi session JSONL files into branch-linearized Dolma transcript rows."""
 
+import json
+import re
 from collections import defaultdict
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-import json
-import re
 from typing import Any
 
 import draccus
-from marin.execution.executor import InputName, THIS_OUTPUT_PATH
+from marin.execution.executor import THIS_OUTPUT_PATH, InputName
 from marin.transform.agent_traces.common import (
     TraceBranchPolicy,
     TraceSourceFormat,

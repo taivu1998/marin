@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import draccus
-from marin.execution.executor import InputName, THIS_OUTPUT_PATH
+from marin.execution.executor import THIS_OUTPUT_PATH, InputName
 from marin.transform.agent_traces.common import TraceSourceFormat, TraceTranscriptConfig, TraceTranscriptMetadataValue
 from marin.transform.agent_traces.transcript_rendering import render_trace_transcript_row
 from zephyr import Dataset, ZephyrContext, load_jsonl
