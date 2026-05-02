@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 
 from marin.rl.environments.tinker_environments.math_grading import extract_boxed, grade_answer, normalize_answer
 from marin.rl.math_utils import last_boxed_only_string

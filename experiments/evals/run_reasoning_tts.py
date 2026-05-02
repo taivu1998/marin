@@ -8,8 +8,6 @@ import json
 import logging
 from contextlib import ExitStack
 
-from rigging.log_setup import configure_logging
-
 from marin.inference.chat_completions import OpenAIChatCompletionProvider
 from marin.inference.model_config import ModelConfig
 from marin.inference.vllm_server import VllmEnvironment
@@ -27,6 +25,7 @@ from marin.test_time_scaling import (
     write_run_summary,
     write_selection_records,
 )
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

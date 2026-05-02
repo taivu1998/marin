@@ -5,7 +5,6 @@
 
 
 import pytest
-
 from marin.inference.model_config import ModelConfig
 from marin.inference.vllm_server import resolve_model_name_or_path
 

@@ -3,11 +3,6 @@
 
 from __future__ import annotations
 
-from openai.types.chat import ChatCompletion, ChatCompletionMessage
-from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
-from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
-from openai.types.completion_usage import CompletionUsage
-
 from marin.inference.chat_completions import ChatCompletionRequest
 from marin.test_time_scaling import (
     CandidateGenerationConfig,
@@ -16,7 +11,6 @@ from marin.test_time_scaling import (
     PromptMessage,
     ScoringMode,
     SelectorName,
-    TestTimeScalingConfig as TtsRunConfig,
     build_run_summary,
     generate_candidates,
     load_prompt_manifest,
@@ -28,6 +22,13 @@ from marin.test_time_scaling import (
     write_run_summary,
     write_selection_records,
 )
+from marin.test_time_scaling import (
+    TestTimeScalingConfig as TtsRunConfig,
+)
+from openai.types.chat import ChatCompletion, ChatCompletionMessage
+from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
+from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
+from openai.types.completion_usage import CompletionUsage
 
 
 def _create_choice(tokenizer, response_text: str, logprob_values: list[float]) -> Choice:

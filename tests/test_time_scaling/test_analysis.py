@@ -9,9 +9,11 @@ from marin.test_time_scaling import (
     PromptMessage,
     ScoringMode,
     SelectorName,
-    TestTimeScalingConfig as TtsRunConfig,
     build_run_summary,
     replay_selectors,
+)
+from marin.test_time_scaling import (
+    TestTimeScalingConfig as TtsRunConfig,
 )
 
 
