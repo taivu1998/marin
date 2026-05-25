@@ -1,7 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import itertools
 import logging
+import time
+from typing import Any
 
 import numpy as np
 from marin.rl.environments.inference_ctx.inflight.async_bridge import AsyncBridge
@@ -155,19 +158,30 @@ def deserialize_state_dict_from_rpc(serialized_state_dict: dict) -> dict:
 
 class WorkerExtension:
     def update_weight(self, new_state_dict: dict, model_name: str):
-        # NOTE(Chris): This step of np -> jax must be on the worker process that
-        # has inherited the TPU devices already because vLLM calls os.fork() already
-        # this means that we will not be able to create a jax cpu mesh before the fork.
+        update_start = time.time()
+        # Run numpy -> JAX/NNX conversion inside the vLLM worker process. The
+        # async engine forks workers before this RPC, so this process owns the
+        # runtime context that will apply the live weight update.
 
         # Deserialize from (bytes, dtype, shape) tuples back to numpy arrays
         deserialized_state_dict = deserialize_state_dict_from_rpc(new_state_dict)
+        deserialize_done = time.time()
         new_state = levanter_state_dict_to_nnx_state_on_cpu(deserialized_state_dict)
+        convert_done = time.time()
         self.sync_weights(
             new_state,
             mappings=MODEL_MAPPINGS[model_name],
             transpose_keys=MODEL_TRANSPOSE_KEYS[model_name],
             reshard_fn=None,
         )
+        sync_done = time.time()
+        return {
+            "deserialize": deserialize_done - update_start,
+            "convert": convert_done - deserialize_done,
+            "sync_weights": sync_done - convert_done,
+            "total": sync_done - update_start,
+            "param_count": len(deserialized_state_dict),
+        }
 
 
 class SyncVLLMWrapper:
@@ -192,6 +206,7 @@ class SyncVLLMWrapper:
 
         self.bridge = AsyncBridge()
         self.bridge.start()
+        self._request_counter = itertools.count()
 
         # Initialize async engine from sync code
         engine_kwargs = {
@@ -215,20 +230,11 @@ class SyncVLLMWrapper:
         logger.info(f"Engine initialized: {engine}")
         return engine
 
-    def generate(self, prompts: list[str], sampling_params: SamplingParams) -> str:
-        """
-        Synchronous generate method - runs async code under the hood.
-
-        Args:
-            prompt: Input prompt
-            max_tokens: Max tokens to generate
-
-        Returns:
-            Generated text
-        """
+    def generate(self, prompts: list[str], sampling_params: SamplingParams) -> list[Any]:
+        """Generate a batch by running vLLM async requests through the sync bridge."""
         return self.bridge.run(self._generate_batch_async(prompts, sampling_params))
 
-    async def _generate_batch_async(self, prompts: list[str], sampling_params: SamplingParams) -> list[str]:
+    async def _generate_batch_async(self, prompts: list[str], sampling_params: SamplingParams) -> list[Any]:
         """
         Generate for multiple prompts concurrently.
         Each prompt gets its own request_id and runs in parallel.
@@ -238,17 +244,16 @@ class SyncVLLMWrapper:
         # Create a task for each prompt
         tasks = []
         for i, prompt in enumerate(prompts):
-            task = self._generate_single_in_batch(prompt, i, sampling_params)
+            request_id = f"batch-{next(self._request_counter)}-{i}"
+            task = self._generate_single_in_batch(prompt, request_id, sampling_params)
             tasks.append(task)
 
         # Run all tasks concurrently
         results = await asyncio.gather(*tasks)
         return results
 
-    async def _generate_single_in_batch(self, prompt: str, idx: int, sampling_params: SamplingParams) -> str:
+    async def _generate_single_in_batch(self, prompt: str, request_id: str, sampling_params: SamplingParams) -> Any:
         """Generate for a single prompt in a batch."""
-        request_id = f"batch-{idx}"
-
         async for output in self.engine.generate(
             request_id=request_id,
             prompt=prompt,
@@ -265,7 +270,7 @@ class SyncVLLMWrapper:
 
     async def _update_weights_async(self, new_state_dict: dict, model_name: str):
         """Async weight update."""
-        await self.engine.engine_core.collective_rpc_async(
+        return await self.engine.engine_core.collective_rpc_async(
             "update_weight",
             args=(new_state_dict, model_name),
         )

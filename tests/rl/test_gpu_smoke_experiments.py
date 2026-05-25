@@ -4,6 +4,7 @@
 import pytest
 
 from experiments.exp_iris_rl_regression_executor_gcs_small_gpu import build_debug_config
+from experiments.exp_iris_rl_regression_executor_gcs_small_gpu_inflight import build_inflight_debug_config
 from experiments.iris_rl_gpu_smoke import (
     DEFAULT_MODEL_ARTIFACT,
     gpu_smoke_model_path,
@@ -26,6 +27,21 @@ def test_build_debug_config_uses_executor_managed_default_model():
     )
 
     assert config.model_config.artifact is DEFAULT_MODEL_ARTIFACT
+
+
+def test_build_inflight_debug_config_uses_executor_managed_default_model():
+    config = build_inflight_debug_config(
+        experiment_name_suffix="test",
+        num_train_steps=3,
+        region="us-east5",
+        gpu_type="H100",
+        gpu_count=4,
+        model_path=None,
+    )
+
+    assert config.model_config.artifact is DEFAULT_MODEL_ARTIFACT
+    assert config.inflight_weight_updates is True
+    assert "inflight" in config.tags
 
 
 def test_gpu_smoke_model_path_rejects_cross_region_gcs_path():

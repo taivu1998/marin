@@ -141,8 +141,6 @@ def _validate_worker_configuration(config: RLJobConfig) -> None:
         raise ValueError("Levanter rollout inference currently requires TPU rollout_resources")
     if config.inference_type == "vllm" and rollout_device_kind == "cpu":
         raise ValueError("vLLM rollout inference requires GPU or TPU rollout_resources")
-    if config.inference_type == "vllm" and rollout_device_kind == "gpu" and config.inflight_weight_updates:
-        raise ValueError("GPU vLLM rollout inference does not yet support inflight_weight_updates")
 
     if config.inference_type != "vllm" or not isinstance(config.inference_config, vLLMInferenceContextConfig):
         return
@@ -150,7 +148,7 @@ def _validate_worker_configuration(config: RLJobConfig) -> None:
         return
     rollout_device = run_config.rollout_resources.device
     assert isinstance(rollout_device, GpuConfig)
-    if config.inference_config.tensor_parallel_size > rollout_device.count:
+    if config.inference_config.engine.tensor_parallel_size > rollout_device.count:
         raise ValueError("rollout_resources must provide at least tensor_parallel_size GPUs for vLLM rollout inference")
 
 

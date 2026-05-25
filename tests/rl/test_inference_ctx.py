@@ -3,6 +3,7 @@
 
 """Tests for InferenceContext utilities and chat template handling."""
 
+import asyncio
 import sys
 from dataclasses import dataclass
 from types import ModuleType, SimpleNamespace
@@ -15,6 +16,7 @@ from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx import (
     MODEL_MAPPINGS,
     MODEL_TRANSPOSE_KEYS,
+    AsyncvLLMInferenceContext,
     LevanterInferenceContext,
     LevanterInferenceContextConfig,
     VLLMEngineConfig,
@@ -22,7 +24,13 @@ from marin.rl.environments.inference_ctx import (
     vLLMInferenceContext,
     vLLMInferenceContextConfig,
 )
-from marin.rl.environments.inference_ctx.inflight.worker import WorkerExtension
+from marin.rl.environments.inference_ctx.async_vllm import serialize_state_dict_for_rpc
+from marin.rl.environments.inference_ctx.inflight import worker as inflight_worker
+from marin.rl.environments.inference_ctx.inflight.worker import (
+    SyncVLLMWrapper,
+    WorkerExtension,
+    deserialize_state_dict_from_rpc,
+)
 from marin.rl.environments.inference_ctx.vllm import InferenceMode
 from openai.types.chat import ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
@@ -577,6 +585,73 @@ def test_vllm_inference_context_uses_canonical_model_name(monkeypatch):
     assert ctx.renderer == "meta-llama/Llama-3.1-8B-Instruct"
 
 
+def test_async_vllm_rpc_state_dict_round_trip():
+    state_dict = {
+        "model.layers.0.input_layernorm.weight": np.arange(6, dtype=np.float32).reshape(2, 3),
+        "metadata": "already-serializable",
+    }
+
+    serialized = serialize_state_dict_for_rpc(state_dict)
+    restored = deserialize_state_dict_from_rpc(serialized)
+
+    np.testing.assert_array_equal(
+        restored["model.layers.0.input_layernorm.weight"],
+        state_dict["model.layers.0.input_layernorm.weight"],
+    )
+    assert restored["metadata"] == "already-serializable"
+
+
+def test_async_vllm_reload_model_records_update_metrics(monkeypatch):
+    class _FakeLLM:
+        def __init__(self):
+            self.update_calls = []
+            self.reset_prefix_cache_calls = 0
+
+        def update_weights(self, state_dict, model_name):
+            self.update_calls.append((state_dict, model_name))
+
+        def reset_prefix_cache(self):
+            self.reset_prefix_cache_calls += 1
+
+    fake_llm = _FakeLLM()
+
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_llm_engine",
+        staticmethod(lambda _config: fake_llm),
+    )
+    monkeypatch.setattr(
+        "marin.rl.environments.inference_ctx.vllm.load_tokenizer",
+        lambda _path: SimpleNamespace(get_vocab=lambda: {}),
+    )
+    monkeypatch.setattr(
+        vLLMInferenceContext,
+        "_get_renderer",
+        staticmethod(lambda model_name, _tokenizer: model_name),
+    )
+
+    ctx = AsyncvLLMInferenceContext(
+        vLLMInferenceContextConfig(
+            engine=VLLMEngineConfig(
+                model_name="test-model",
+                canonical_model_name="meta-llama/Llama-3.1-8B-Instruct",
+                max_model_len=1024,
+                tensor_parallel_size=2,
+                gpu_memory_utilization=0.9,
+            ),
+            fallback_sampling=VLLMFallbackSamplingConfig(),
+        )
+    )
+    ctx.reload_model(None, {"model.layers.0.input_layernorm.weight": np.zeros((2,), dtype=np.float32)})
+
+    assert fake_llm.update_calls[0][1] == "meta-llama/Llama-3.1-8B-Instruct"
+    assert fake_llm.reset_prefix_cache_calls == 1
+    metrics = ctx.get_metrics()
+    assert metrics["vllm_inflight/update_count"] == 1
+    assert metrics["vllm_inflight/param_count"] == 1
+    assert metrics["vllm_inflight/update_total"] >= 0
+
+
 def test_vllm_sync_engine_receives_kv_cache_metrics_flag(monkeypatch):
     calls = {}
 
@@ -651,6 +726,55 @@ def test_vllm_async_engine_receives_engine_seed(monkeypatch):
     assert calls["seed"] == 1234
 
 
+def test_sync_vllm_wrapper_uses_unique_request_ids(monkeypatch):
+    request_ids = []
+
+    class _FakeBridge:
+        def start(self):
+            pass
+
+        def run(self, awaitable):
+            return asyncio.run(awaitable)
+
+        def stop(self):
+            pass
+
+    class _FakeAsyncEngineArgs:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class _FakeEngine:
+        engine_core = SimpleNamespace(collective_rpc_async=None)
+
+        async def generate(self, *, request_id, prompt, sampling_params):
+            del prompt, sampling_params
+            request_ids.append(request_id)
+            yield SimpleNamespace(finished=True)
+
+        async def reset_prefix_cache(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+    class _FakeAsyncLLM:
+        @staticmethod
+        def from_engine_args(*, engine_args, start_engine_loop):
+            del engine_args, start_engine_loop
+            return _FakeEngine()
+
+    monkeypatch.setattr(inflight_worker, "AsyncBridge", _FakeBridge)
+    monkeypatch.setattr(inflight_worker, "AsyncEngineArgs", _FakeAsyncEngineArgs)
+    monkeypatch.setattr(inflight_worker, "AsyncLLM", _FakeAsyncLLM)
+
+    wrapper = SyncVLLMWrapper(model="test-model")
+
+    wrapper.generate(["prompt-a", "prompt-b"], SimpleNamespace())
+    wrapper.generate(["prompt-a"], SimpleNamespace())
+
+    assert request_ids == ["batch-0-0", "batch-1-1", "batch-2-0"]
+
+
 def test_worker_extension_uses_public_sync_weights():
     calls = {}
 
@@ -669,12 +793,14 @@ def test_worker_extension_uses_public_sync_weights():
         ),
     }
 
-    WorkerExtension.update_weight(_FakeWorker(), serialized_state, "meta-llama/Llama-3.1-8B-Instruct")
+    metrics = WorkerExtension.update_weight(_FakeWorker(), serialized_state, "meta-llama/Llama-3.1-8B-Instruct")
 
     assert hasattr(calls["new_state"], "flat_state")
     assert calls["mappings"] == MODEL_MAPPINGS["meta-llama/Llama-3.1-8B-Instruct"]
     assert calls["transpose_keys"] == MODEL_TRANSPOSE_KEYS["meta-llama/Llama-3.1-8B-Instruct"]
     assert calls["reshard_fn"] is None
+    assert metrics["param_count"] == 1
+    assert metrics["total"] >= 0
 
 
 def test_patch_tpu_inference_registry_registers_mistral_alias(monkeypatch):

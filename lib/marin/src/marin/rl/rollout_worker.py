@@ -67,6 +67,8 @@ from .weight_transfer.base import WeightUpdate
 
 logger = logging.getLogger(__name__)
 
+WEIGHT_TRANSFER_THREAD_SHUTDOWN_TIMEOUT = 30.0
+
 
 @dataclass(frozen=True)
 class RolloutTransferCounterSnapshot:
@@ -353,8 +355,6 @@ def create_inference_context(
         )
     elif inference_type == "vllm" and inflight_weight_updates:
         inference_config = cast(vLLMInferenceContextConfig, inference_config)
-        if inference_config.engine.device_kind == "gpu":
-            raise ValueError("GPU vLLM rollout inference does not yet support inflight_weight_updates")
         inference_config = prepare_vllm_inference_config_for_inflight(inference_config)
         return AsyncvLLMInferenceContext(
             inference_config=inference_config,
@@ -598,11 +598,16 @@ class RolloutWorker:
         # Wait for the main loop to finish
         self._shutdown_complete.wait()
 
+        if self.weight_transfer_thread:
+            self.weight_transfer_thread.join(timeout=WEIGHT_TRANSFER_THREAD_SHUTDOWN_TIMEOUT)
+            if self.weight_transfer_thread.is_alive():
+                logger.warning(
+                    "Weight transfer thread did not stop within %.1fs; shutting down policy context anyway",
+                    WEIGHT_TRANSFER_THREAD_SHUTDOWN_TIMEOUT,
+                )
+
         # Now shutdown the inference server
         self._policy_ctx.shutdown()
-
-        if self.weight_transfer_thread:
-            self.weight_transfer_thread.join()
 
     def _apply_weight_update(self, update: WeightUpdate):
         """Apply a newly received weight update to the inference context."""

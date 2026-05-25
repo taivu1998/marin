@@ -6,7 +6,18 @@ from types import SimpleNamespace
 
 import pytest
 from fray.types import JobStatus, ResourceConfig
-from marin.rl.orchestration import _HostedRuntime, _run_rl_coordinator, _train_worker_entry
+from marin.rl.environments.inference_ctx.vllm import (
+    VLLMEngineConfig,
+    VLLMFallbackSamplingConfig,
+    vLLMInferenceContextConfig,
+)
+from marin.rl.orchestration import (
+    _HostedRuntime,
+    _run_rl_coordinator,
+    _train_worker_entry,
+    _validate_worker_configuration,
+    _worker_dependency_groups,
+)
 from marin.rl.rl_job import RunConfig
 from marin.rl.rollout_worker import RolloutTrackerConfig
 
@@ -114,6 +125,58 @@ def _run_config(
         rollout_resources=rollout_resources or ResourceConfig.with_tpu("v5p-8", regions=["us-central1"]),
         num_rollout_workers=num_rollout_workers,
     )
+
+
+def _gpu_resources() -> ResourceConfig:
+    return ResourceConfig.with_gpu("H100", count=4, cpu=32, ram="240g", disk="128g", regions=["us-central1"])
+
+
+def _vllm_config(tensor_parallel_size: int = 4) -> vLLMInferenceContextConfig:
+    return vLLMInferenceContextConfig(
+        engine=VLLMEngineConfig(
+            model_name="test-model",
+            canonical_model_name="meta-llama/Llama-3.1-8B-Instruct",
+            max_model_len=2048,
+            tensor_parallel_size=tensor_parallel_size,
+            gpu_memory_utilization=0.9,
+            device_kind="gpu",
+        ),
+        fallback_sampling=VLLMFallbackSamplingConfig(),
+    )
+
+
+def test_validate_worker_configuration_allows_gpu_vllm_inflight():
+    config = SimpleNamespace(
+        inference_type="vllm",
+        inference_config=_vllm_config(),
+        inflight_weight_updates=True,
+        run_config=_run_config(train_resources=_gpu_resources(), rollout_resources=_gpu_resources()),
+    )
+
+    _validate_worker_configuration(config)
+
+
+def test_validate_worker_configuration_rejects_oversized_gpu_tensor_parallelism():
+    config = SimpleNamespace(
+        inference_type="vllm",
+        inference_config=_vllm_config(tensor_parallel_size=8),
+        inflight_weight_updates=True,
+        run_config=_run_config(train_resources=_gpu_resources(), rollout_resources=_gpu_resources()),
+    )
+
+    with pytest.raises(ValueError, match="tensor_parallel_size GPUs"):
+        _validate_worker_configuration(config)
+
+
+def test_gpu_vllm_worker_dependency_groups_pin_cuda_vllm_package():
+    extras, pip_packages = _worker_dependency_groups(
+        SimpleNamespace(pip_dependency_groups=["math", "vllm", "gpu", "tpu"]),
+        _gpu_resources(),
+        needs_vllm=True,
+    )
+
+    assert extras == ["gpu", "math"]
+    assert pip_packages == ["vllm==0.13.0"]
 
 
 def test_run_rl_coordinator_shuts_down_hosted_actors_when_child_job_fails(monkeypatch):

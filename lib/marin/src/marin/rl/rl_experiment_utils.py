@@ -249,8 +249,6 @@ def _build_rl_job_config(
     rollout_device_kind = config.rollout_resources.device.kind
     if rollout_device_kind not in {"gpu", "tpu"}:
         raise ValueError("RL rollout_resources must request GPU or TPU accelerators for vLLM inference")
-    if config.inflight_weight_updates and rollout_device_kind == "gpu":
-        raise ValueError("GPU vLLM rollout inference does not yet support inflight_weight_updates")
     vllm_device_kind = cast(Literal["gpu", "tpu"], rollout_device_kind)
 
     launcher_region = launcher_region_for_rl_experiment(config)

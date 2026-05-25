@@ -299,22 +299,52 @@ def test_build_rl_job_config_uses_dummy_load_format_for_non_object_store_model_p
     assert job_config.inference_config.engine.device_kind == "tpu"
 
 
-def test_build_rl_job_config_rejects_gpu_inflight_vllm(monkeypatch):
-    monkeypatch.delenv("MARIN_PREFIX", raising=False)
+def test_build_rl_job_config_allows_gpu_inflight_vllm(monkeypatch):
+    class _FakeConverter:
+        def __init__(self, *args, **kwargs):
+            self.default_hf_config = SimpleNamespace(vocab_size=32000)
 
-    with pytest.raises(ValueError, match="does not yet support inflight_weight_updates"):
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
+
+    job_config = _build_rl_job_config(
+        name="rl-test",
+        config=_test_config(
+            inflight_weight_updates=True,
+            train_resources=ResourceConfig.with_gpu(
+                "H100",
+                count=4,
+                cpu=32,
+                ram="240g",
+                disk="128g",
+                regions=["us-central1"],
+            ),
+            rollout_resources=ResourceConfig.with_gpu(
+                "H100",
+                count=4,
+                cpu=32,
+                ram="240g",
+                disk="128g",
+                regions=["us-central1"],
+            ),
+        ),
+        curriculum=_test_curriculum(),
+        model_path=MODEL_NAME,
+        output_path="gs://marin-us-central1/rl_testing/rl-test",
+    )
+
+    assert job_config.inflight_weight_updates is True
+    assert job_config.inference_config.engine.device_kind == "gpu"
+    assert job_config.run_config.rollout_resources.device.kind == "gpu"
+
+
+def test_build_rl_job_config_rejects_cpu_vllm_rollout_resources():
+    with pytest.raises(ValueError, match="rollout_resources must request GPU or TPU"):
         _build_rl_job_config(
             name="rl-test",
             config=_test_config(
-                inflight_weight_updates=True,
-                rollout_resources=ResourceConfig.with_gpu(
-                    "H100",
-                    count=4,
-                    cpu=32,
-                    ram="240g",
-                    disk="128g",
-                    regions=["us-central1"],
-                ),
+                rollout_resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="64g"),
             ),
             curriculum=_test_curriculum(),
             model_path=MODEL_NAME,

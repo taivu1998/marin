@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -250,24 +251,74 @@ def test_create_inference_context_uses_local_metadata_for_remote_inflight_vllm(m
     assert captured["config"].engine.kv_cache_metrics is True
 
 
-def test_create_inference_context_rejects_gpu_inflight_vllm():
-    with pytest.raises(ValueError, match="does not yet support inflight_weight_updates"):
-        create_inference_context(
-            "vllm",
-            vLLMInferenceContextConfig(
-                engine=VLLMEngineConfig(
-                    model_name="test-model",
-                    canonical_model_name="meta-llama/Llama-3.1-8B-Instruct",
-                    max_model_len=2048,
-                    tensor_parallel_size=4,
-                    gpu_memory_utilization=0.9,
-                    kv_cache_metrics=True,
-                    device_kind="gpu",
-                ),
-                fallback_sampling=VLLMFallbackSamplingConfig(),
+def test_create_inference_context_allows_gpu_inflight_vllm(monkeypatch):
+    captured = {}
+
+    class _FakeAsyncContext:
+        def __init__(self, *, inference_config):
+            captured["config"] = inference_config
+
+    monkeypatch.setattr("marin.rl.rollout_worker.AsyncvLLMInferenceContext", _FakeAsyncContext)
+
+    ctx = create_inference_context(
+        "vllm",
+        vLLMInferenceContextConfig(
+            engine=VLLMEngineConfig(
+                model_name="test-model",
+                canonical_model_name="meta-llama/Llama-3.1-8B-Instruct",
+                max_model_len=2048,
+                tensor_parallel_size=4,
+                gpu_memory_utilization=0.9,
+                kv_cache_metrics=True,
+                device_kind="gpu",
             ),
-            inflight_weight_updates=True,
-        )
+            fallback_sampling=VLLMFallbackSamplingConfig(),
+        ),
+        inflight_weight_updates=True,
+    )
+
+    assert isinstance(ctx, _FakeAsyncContext)
+    assert captured["config"].engine.device_kind == "gpu"
+
+
+def test_rollout_worker_stop_joins_weight_thread_before_policy_shutdown():
+    events = []
+
+    class _FakeTransferClient:
+        def cleanup(self):
+            events.append("cleanup")
+
+    class _FakeShutdownComplete:
+        def wait(self):
+            events.append("wait")
+
+    class _FakePolicyContext:
+        def shutdown(self):
+            events.append("shutdown")
+
+    class _FakeThread:
+        def join(self, timeout=None):
+            events.append(("join", timeout))
+
+        def is_alive(self):
+            return False
+
+    worker = object.__new__(RolloutWorker)
+    worker._shutdown_condition = threading.Condition()
+    worker._running = True
+    worker._transfer_client = _FakeTransferClient()
+    worker._shutdown_complete = _FakeShutdownComplete()
+    worker._policy_ctx = _FakePolicyContext()
+    worker.weight_transfer_thread = _FakeThread()
+
+    worker.stop()
+
+    assert events == [
+        "cleanup",
+        "wait",
+        ("join", 30.0),
+        "shutdown",
+    ]
 
 
 @pytest.mark.parametrize(
