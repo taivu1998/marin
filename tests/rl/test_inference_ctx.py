@@ -609,12 +609,18 @@ def test_async_vllm_reload_model_records_update_metrics(monkeypatch):
 
         def update_weights(self, state_dict, model_name):
             self.update_calls.append((state_dict, model_name))
+            return [
+                {"deserialize": 0.1, "convert": 0.2, "sync_weights": 0.3, "total": 0.6, "param_count": 1},
+                {"deserialize": 0.2, "convert": 0.1, "sync_weights": 0.4, "total": 0.7, "param_count": 1},
+            ]
 
         def reset_prefix_cache(self):
             self.reset_prefix_cache_calls += 1
 
     fake_llm = _FakeLLM()
+    clock = iter([10.0, 10.25, 11.0, 11.125])
 
+    monkeypatch.setattr("marin.rl.environments.inference_ctx.async_vllm.time.time", lambda: next(clock))
     monkeypatch.setattr(
         vLLMInferenceContext,
         "_get_llm_engine",
@@ -642,14 +648,26 @@ def test_async_vllm_reload_model_records_update_metrics(monkeypatch):
             fallback_sampling=VLLMFallbackSamplingConfig(),
         )
     )
-    ctx.reload_model(None, {"model.layers.0.input_layernorm.weight": np.zeros((2,), dtype=np.float32)})
+    state_dict = {"model.layers.0.input_layernorm.weight": np.arange(2, dtype=np.float32)}
 
-    assert fake_llm.update_calls[0][1] == "meta-llama/Llama-3.1-8B-Instruct"
+    ctx.reload_model(None, state_dict)
+
+    serialized_state_dict, model_name = fake_llm.update_calls[0]
+    assert model_name == "meta-llama/Llama-3.1-8B-Instruct"
+    serialized_value = serialized_state_dict["model.layers.0.input_layernorm.weight"]
+    assert serialized_value == (state_dict["model.layers.0.input_layernorm.weight"].tobytes(), "float32", (2,))
     assert fake_llm.reset_prefix_cache_calls == 1
     metrics = ctx.get_metrics()
     assert metrics["vllm_inflight/update_count"] == 1
     assert metrics["vllm_inflight/param_count"] == 1
-    assert metrics["vllm_inflight/update_total"] >= 0
+    assert metrics["vllm_inflight/serialize"] == 0.25
+    assert metrics["vllm_inflight/rpc_update"] == 0.75
+    assert metrics["vllm_inflight/prefix_cache_reset"] == 0.125
+    assert metrics["vllm_inflight/update_total"] == 1.125
+    assert metrics["vllm_inflight/worker_count"] == 2
+    assert metrics["vllm_inflight/worker_sync_weights_max"] == 0.4
+    assert metrics["vllm_inflight/worker_total_avg"] == pytest.approx(0.65)
+    assert metrics["vllm_inflight/worker_param_count_max"] == 1
 
 
 def test_vllm_sync_engine_receives_kv_cache_metrics_flag(monkeypatch):
@@ -775,7 +793,8 @@ def test_sync_vllm_wrapper_uses_unique_request_ids(monkeypatch):
     assert request_ids == ["batch-0-0", "batch-1-1", "batch-2-0"]
 
 
-def test_worker_extension_uses_public_sync_weights():
+def test_worker_extension_uses_public_sync_weights(monkeypatch):
+    clock = iter([1.0, 2.5, 5.0, 9.0])
     calls = {}
 
     class _FakeWorker:
@@ -793,6 +812,7 @@ def test_worker_extension_uses_public_sync_weights():
         ),
     }
 
+    monkeypatch.setattr(inflight_worker.time, "time", lambda: next(clock))
     metrics = WorkerExtension.update_weight(_FakeWorker(), serialized_state, "meta-llama/Llama-3.1-8B-Instruct")
 
     assert hasattr(calls["new_state"], "flat_state")
@@ -800,7 +820,10 @@ def test_worker_extension_uses_public_sync_weights():
     assert calls["transpose_keys"] == MODEL_TRANSPOSE_KEYS["meta-llama/Llama-3.1-8B-Instruct"]
     assert calls["reshard_fn"] is None
     assert metrics["param_count"] == 1
-    assert metrics["total"] >= 0
+    assert metrics["deserialize"] == 1.5
+    assert metrics["convert"] == 2.5
+    assert metrics["sync_weights"] == 4.0
+    assert metrics["total"] == 8.0
 
 
 def test_patch_tpu_inference_registry_registers_mistral_alias(monkeypatch):

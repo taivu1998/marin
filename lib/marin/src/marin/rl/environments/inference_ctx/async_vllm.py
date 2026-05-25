@@ -5,6 +5,8 @@ import dataclasses
 import logging
 import os
 import time
+from collections.abc import Mapping
+from numbers import Real
 from typing import Any
 
 import numpy as np
@@ -16,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 # Allow vLLM to serialize custom types needed for async inference
 os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
+
+_WORKER_UPDATE_TIMING_KEYS = ("deserialize", "convert", "sync_weights", "total")
 
 
 def serialize_state_dict_for_rpc(state_dict: dict) -> dict:
@@ -32,6 +36,41 @@ def serialize_state_dict_for_rpc(state_dict: dict) -> dict:
             # Already serializable (or will fail later with a clear error)
             serialized[key] = value
     return serialized
+
+
+def _summarize_worker_update_metrics(worker_results: Any) -> dict[str, float | int]:
+    if isinstance(worker_results, Mapping):
+        worker_records = [worker_results]
+    elif isinstance(worker_results, (list, tuple)):
+        worker_records = [record for record in worker_results if isinstance(record, Mapping)]
+    else:
+        worker_records = []
+
+    if not worker_records:
+        return {}
+
+    summary: dict[str, float | int] = {
+        "vllm_inflight/worker_count": len(worker_records),
+    }
+    for metric_name in _WORKER_UPDATE_TIMING_KEYS:
+        values = [
+            float(value)
+            for record in worker_records
+            if isinstance((value := record.get(metric_name)), Real) and not isinstance(value, bool)
+        ]
+        if values:
+            summary[f"vllm_inflight/worker_{metric_name}_avg"] = sum(values) / len(values)
+            summary[f"vllm_inflight/worker_{metric_name}_max"] = max(values)
+
+    param_counts = [
+        int(value)
+        for record in worker_records
+        if isinstance((value := record.get("param_count")), Real) and not isinstance(value, bool)
+    ]
+    if param_counts:
+        summary["vllm_inflight/worker_param_count_max"] = max(param_counts)
+
+    return summary
 
 
 class AsyncvLLMInferenceContext(vLLMInferenceContext):
@@ -53,7 +92,7 @@ class AsyncvLLMInferenceContext(vLLMInferenceContext):
         # vLLM's collective_rpc can corrupt numpy arrays during pickling.
         serialized_state_dict = serialize_state_dict_for_rpc(state_dict)
         serialize_done = time.time()
-        self.llm.update_weights(serialized_state_dict, self.canonical_model_name)
+        worker_update_metrics = self.llm.update_weights(serialized_state_dict, self.canonical_model_name)
         update_done = time.time()
         self.llm.reset_prefix_cache()  # Reset prefix cache because of new weights
         reset_done = time.time()
@@ -66,6 +105,7 @@ class AsyncvLLMInferenceContext(vLLMInferenceContext):
             "vllm_inflight/prefix_cache_reset": reset_done - update_done,
             "vllm_inflight/update_total": reset_done - start_time,
         }
+        self._last_update_metrics.update(_summarize_worker_update_metrics(worker_update_metrics))
         logger.info(
             "Async vLLM weight update complete: params=%d serialize=%.2fs rpc=%.2fs reset=%.2fs total=%.2fs",
             len(state_dict),

@@ -14,6 +14,7 @@ from marin.rl.environments.inference_ctx.vllm import (
     vLLMInferenceContextConfig,
 )
 from marin.rl.rollout_worker import (
+    WEIGHT_TRANSFER_THREAD_SHUTDOWN_TIMEOUT,
     RolloutTracker,
     RolloutTrackerConfig,
     RolloutTransferCounterSnapshot,
@@ -316,7 +317,7 @@ def test_rollout_worker_stop_joins_weight_thread_before_policy_shutdown():
     assert events == [
         "cleanup",
         "wait",
-        ("join", 30.0),
+        ("join", WEIGHT_TRANSFER_THREAD_SHUTDOWN_TIMEOUT),
         "shutdown",
     ]
 
