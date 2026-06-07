@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from openai import OpenAI
 from openai.types.chat import ChatCompletion
@@ -71,4 +71,5 @@ class OpenAIChatCompletionProvider:
         if request.seed is not None:
             request_kwargs["seed"] = request.seed
 
-        return self._client.chat.completions.create(**request_kwargs)
+        request_kwargs["stream"] = False
+        return cast(ChatCompletion, self._client.chat.completions.create(**request_kwargs))
